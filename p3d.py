@@ -126,7 +126,7 @@ class Bottleneck():
                                   strides=self.downsample[1],padding='SAME')
             residual=tf.layers.batch_normalization(residual,training=self.training)
         
-        residual = attention(residual, ch=None, name='attention_{}'.format(self.id))
+        # residual = attention(residual, ch=None, name='attention_{}'.format(self.id))
         # CBAM
         # residual = cbam_block(residual, name='attention_{}'.format(self.id))
         out+=residual
@@ -165,13 +165,14 @@ class make_block():
         return x
 
 #build structure of the p3d network.
-def inference_p3d(_X,_dropout,batch_size=2, training=True):
+def p3d_unet(_X,_dropout,batch_size=2, training=True):
     cnt=0
     # 16 112 112 3
     conv1_custom=tf.nn.conv3d(_X,get_conv_weight('firstconv1',[1,7,7,3,64]),strides=[1,1,2,2,1],padding='SAME')
     conv1_custom_bn=tf.layers.batch_normalization(conv1_custom,training=training)
     conv1_custom_bn_relu=tf.nn.relu(conv1_custom_bn)
     # 16 56 56 64
+    pool1_concat=tf.nn.max_pool3d(conv1_custom_bn_relu,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
     pool1=tf.nn.max_pool3d(conv1_custom_bn_relu,[1,2,3,3,1],strides=[1,2,2,2,1],padding='SAME')
     # 8 28 28 64
     b1=make_block(pool1,64,3,64,cnt)
@@ -204,16 +205,48 @@ def inference_p3d(_X,_dropout,batch_size=2, training=True):
     deconv2_bn = tf.layers.batch_normalization(deconv2, name='deconv2_bn', training=training)
     deconv2_re = tf.nn.relu(deconv2_bn)
     deconv2_concat = tf.concat([deconv2_re, pool2], axis=-1)
-    deconv2_concat = tf.layers.dropout(deconv2_concat, rate=_dropout, training=training)
     # 4 28 28
     deconv3 = tf.layers.conv3d_transpose(deconv2_concat, 128, 3, [2, 2, 2], 'same')
     deconv3_bn = tf.layers.batch_normalization(deconv3, name='deconv3_bn', training=training)
     deconv3_re = tf.nn.relu(deconv3_bn)
+    deconv3_concat = tf.concat([deconv3_re, pool1_concat], axis=-1)
     deconv3_drop = tf.layers.dropout(deconv3_re, rate=_dropout, training=training)
     # 8 56 56
-    results = tf.layers.conv3d_transpose(deconv3_drop, 1, 3, [2, 2, 2], 'same')
+    deconv4_conv1 = tf.layers.conv3d(deconv3_drop, 32, 1, 1, 'same')
+    results = tf.layers.conv3d_transpose(deconv4_conv1, 1, 3, [2, 2, 2], 'same')
     # convlution
     return results
+
+
+def p3d_concat(_X, _dropout, batch_size=2, training=True):
+    cnt=0
+    # 16 112 112 3
+    conv1_custom=tf.nn.conv3d(_X,get_conv_weight('firstconv1',[1,7,7,3,64]),strides=[1,1,2,2,1],padding='SAME')
+    conv1_custom_bn=tf.layers.batch_normalization(conv1_custom,training=training)
+    conv1_custom_bn_relu=tf.nn.relu(conv1_custom_bn)
+    # 16 56 56 64
+    pool1_concat=tf.nn.max_pool3d(conv1_custom_bn_relu,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    pool1=tf.nn.max_pool3d(conv1_custom_bn_relu,[1,2,3,3,1],strides=[1,2,2,2,1],padding='SAME')
+    # 8 28 28 64
+    b1=make_block(pool1,64,3,64,cnt)
+    res1=b1.infer()
+    # 8 28 28 256
+    cnt=b1.cnt
+    pool2=tf.nn.max_pool3d(res1,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 4 28 28 256
+    b2=make_block(pool2,128,8,256,cnt,stride=2)
+    res2=b2.infer()
+    # 4 14 14 512 
+    cnt=b2.cnt
+    pool3=tf.nn.max_pool3d(res2,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 2 14 14 512
+    b3=make_block(pool3,256,36,512,cnt,stride=2)
+    res3=b3.infer()
+    # 2 7 7 1024
+    cnt=b3.cnt
+    pool4=tf.nn.max_pool3d(res3,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 1 7 7 1024
+    # 
 
 def inference_p3d_sa(_X,_dropout,batch_size=2, training=True):
     cnt=0
@@ -272,3 +305,4 @@ def inference_p3d_sa(_X,_dropout,batch_size=2, training=True):
     # 16 112 112
     return results
     
+

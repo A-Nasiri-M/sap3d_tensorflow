@@ -29,7 +29,7 @@ CROP_SIZE = 112
 
 def get_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--net', type=str, default='P3D', help="model")
+    parser.add_argument('--structure', type=str, default='unet', help="unet/concat")
     parser.add_argument('--plotiter', type=int, default=1000, help='training mini batch')
     parser.add_argument('--validiter', type=int, default=12000, help='training mini batch')
     parser.add_argument('--savemodeliter', type=int, default=1500, help='training mini batch')
@@ -52,12 +52,12 @@ def mkDir(dirpath):
     if os.path.exists(dirpath)==0:
         os.mkdir(dirpath)
 
-def output_message(args):
+def output_message(args, saved_dir):
     print "##############################"
     print "  Output the Training Config  "
     print "##############################"
 
-    print "Net                   : ", args.net
+    print "Structure             : ", args.structure
     print "Training datasets     : ", args.trainingbase
     print "Valid Iter            : ", args.validiter
     print "Save Iter             : ", args.savemodeliter
@@ -66,15 +66,12 @@ def output_message(args):
     print "Initial Learning Rate : ", args.lr
     print "Training Example Prop : ", args.trainingexampleprops
     print "GPU                   : ", args.gpu
+    print "Saved Dir             : ", saved_dir
     print ""
     print "##############################"
 
 print "Parsing arguments..."
 args = get_arguments()
-output_message(args)
-
-
-
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 print ("Loading data...")
@@ -109,51 +106,22 @@ gt_df = BatchData(gt_df, args.batch, remainder=False, use_list=True)
 gt_df = PrefetchDataZMQ(gt_df, nr_proc=1)
 gt_df.reset_state()
 
-# queue
-# queue = tf.FIFOQueue(100, dtypes=tf.float32)
-# queue_i = QueueInput(df)
-
-# print queue_i._set
-# 78770 19693
-print "data and lable loaded"
-net = args.net
+print "Using dataflow to load data..."
+structure = args.structure
 validation_iter=args.validiter
 plot_iter = args.plotiter
-plot_dict = {
-    'x':[], 
-    'x_valid':[], 
-    'y_loss':[], 
-    'y_cc':[], 
-    'y_sim':[], 
-    'y_auc':[]
-}
-
-plt.subplot(4, 1, 1)
-plt.plot(plot_dict['x'], plot_dict['y_loss'])
-plt.ylabel('loss')
-plt.subplot(4, 1, 2)
-plt.plot(plot_dict['x_valid'], plot_dict['y_cc'])
-plt.ylabel('cc metric')
-plt.subplot(4, 1, 3)
-plt.plot(plot_dict['x_valid'], plot_dict['y_sim'])
-plt.ylabel('sim metric')
-plt.subplot(4, 1, 4)
-plt.plot(plot_dict['x_valid'], plot_dict['y_auc'])
-plt.xlabel('iter')
-plt.ylabel('auc metric')
 
 t = datetime.datetime.now().isoformat()[:-16]
-dir_name = net + '_' + str(args.batch) + '_' + str(args.lr) + '_' + args.info +'_'+ t + '/'
-plot_figure_dir = './figure/' + dir_name
+dir_name = structure + '_' + str(args.batch) + '_' + str(args.lr) + '_' + args.info +'_'+ t + '/'
 model_save_dir = './model/' + dir_name
 logs_dir = './logs/' + dir_name
 mkDir(logs_dir)
-mkDir(plot_figure_dir)
 mkDir(model_save_dir)
 
+output_message(args, model_save_dir)
 
 
-def train_STSM():
+def train():
     batch_size = args.batch  # train images=batch_size*frames
     frames = 16  # 3 frames
     Dataset='svsd'
@@ -166,23 +134,22 @@ def train_STSM():
             dropout = tf.placeholder(tf.float32)
     
     
-    if net == 'P3D':
-        pred=p3d.inference_p3d(x, dropout, batch_size, training)
-    elif net == 'P3D_SA': 
-        pred=p3d.inference_p3d_sa(x, dropout, batch_size, training)
+    if structure == 'unet':
+        pred=p3d.p3d_unet(x, dropout, batch_size, training)
+    elif net == 'concat': 
+        pred=p3d.p3d_concat(x, dropout, batch_size, training)
+
     pred_reshape = tf.reshape(pred, [batch_size, 16, CROP_SIZE, CROP_SIZE])
 
     with tf.name_scope('loss'):
-        # loss1 = smooth_l1_loss(pred_reshape, y, 1, 1, sigma=1.0, dim=[-1])
-
-        loss1 = tf.reduce_mean(tf.reduce_sum(tf.abs(pred_reshape-y)))
+        loss1 = smooth_l1_loss(pred_reshape, y, 1, 1, sigma=1.0)
+        # loss1 = tf.reduce_mean(tf.reduce_sum(tf.abs(pred_reshape-y)))
         # wd_loss = tf.reduce_mean(tf.get_collection('weightdecay_losses'))
         loss = loss1
         tf.summary.scalar('loss', loss)
 
     with tf.name_scope('train'):
         lr = args.lr
-        # optimizer=tf.train.GradientDescentOptimizer(lr).minimize(loss)
         optimizer = tf.train.AdamOptimizer(lr).minimize(loss)
         #when using BN,this dependecy must be built.
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS) 
@@ -191,26 +158,17 @@ def train_STSM():
             
 
     with tf.Session(config=config) as sess:
-        if int((tf.__version__).split('.')[0]) < 1:  # tensorflow version < 0.12
-            merged = tf.merge_all_summaries()
-        else:  # tensorflow version >= 0.12
-            merged = tf.summary.merge_all()
-        # tf.train.SummaryWriter soon be deprecated, use following
-        if int((tf.__version__).split('.')[0]) < 1:  # tensorflow version < 0.12
-            writer = tf.train.SummaryWriter(logs_dir, sess.graph)
-        else:  # tensorflow version >= 0.123
-            writer = tf.summary.FileWriter(logs_dir, sess.graph)
-        if int((tf.__version__).split('.')[0]) < 1:
-            init = tf.initialize_all_variables()
-        else:
-            init = tf.global_variables_initializer()
-        
+        merged = tf.summary.merge_all()
+        writer = tf.summary.FileWriter(logs_dir, sess.graph)
+        init = tf.global_variables_initializer()
+    
         var_list = tf.trainable_variables()
         g_list = tf.global_variables()
         bn_moving_vars = [g for g in g_list if 'moving_mean' in g.name]
         bn_moving_vars += [g for g in g_list if 'moving_variance' in g.name]
         var_list += bn_moving_vars
-        saver = tf.train.Saver(var_list=var_list, max_to_keep=5)
+        saver = tf.train.Saver(var_list=var_list, max_to_keep=10)
+
         print 'Init variable'
         sess.run(init)
 
@@ -222,13 +180,11 @@ def train_STSM():
                 print("loading checkpoint %s,waiting......" % ckpt.model_checkpoint_path)
                 saver.restore(sess, ckpt.model_checkpoint_path)
                 print("load complete!")
-                # exit()
 
         print 'Start training'
         step = 0
-        epoch = 8
-        training_iters = epoch * 78880 / batch_size
-        data_time = 0
+        epoch = 4
+        training_iters = epoch * 86768 / batch_size
         for data in df:
             step = step + 1
             if step >= training_iters:
@@ -247,7 +203,6 @@ def train_STSM():
                 image = sess.run(pred,
                                 feed_dict={ x: train_batch_xs, dropout: 0, training: False})
                 image1 = np.reshape(image, [-1, 16, CROP_SIZE, CROP_SIZE]) 
-
                 save_image1 = np.zeros([CROP_SIZE, CROP_SIZE])
                 save_image2 = np.zeros([CROP_SIZE, CROP_SIZE])
                 save_image1[:, :] = image1[0, -1, :, :]*255.
@@ -273,10 +228,9 @@ def train_STSM():
                     image0 = sess.run(pred, feed_dict={ x: valid_batch_xs, dropout: 0, training: False})
                     image0 = np.reshape(image0, [-1, 16, CROP_SIZE, CROP_SIZE])
                     for (prediction, ground_truth) in zip(image0, valid_batch_ys):
-                        # 16 112 112 1,  1, CROP_SIZE, CROP_SIZE]
+                        # 16 112 112 ,  16, 112, 112
                         prediction = np.array(prediction[-1])
                         ground_truth = np.array(ground_truth[-1])
-                        # print np.array(prediction).shape, np.array(ground_truth).shape
                         if index % 1000 == 0:
                             print datetime.datetime.now(), ' Index', index, 'pred:', np.sum(prediction), 'gt:', np.sum(ground_truth), 'loss:', np.sum(np.abs(prediction-ground_truth))
                         tmp_cc.append(CC(prediction, ground_truth))
@@ -286,36 +240,10 @@ def train_STSM():
                 tmp_sim = np.array(tmp_sim)[~np.isnan(tmp_sim)]
                 tmp_auc = np.array(tmp_auc)[~np.isnan(tmp_auc)]
                 print datetime.datetime.now().isoformat()[:-7], " Step:", step, " Metrics:", np.mean(tmp_cc), np.mean(tmp_sim), np.mean(tmp_auc)
-                plot_dict['x_valid'].append(step)
-                plot_dict['y_cc'].append(np.mean(tmp_cc))
-                plot_dict['y_sim'].append(np.mean(tmp_sim))
-                plot_dict['y_auc'].append(np.mean(tmp_auc))
-            
-            if step%plot_iter==0:
-                    plot_xlength=500
-                    plt.subplot(4, 1, 1)
-                    plt.plot(plot_dict['x'][-plot_xlength:], plot_dict['y_loss'][-plot_xlength:])
-                    plt.ylabel('loss')
-                    plt.subplot(4, 1, 2)
-                    plt.plot(plot_dict['x_valid'][-plot_xlength:], plot_dict['y_cc'][-plot_xlength:])
-                    plt.ylabel('cc metric')
-                    plt.subplot(4, 1, 3)
-                    plt.plot(plot_dict['x_valid'][-plot_xlength:], plot_dict['y_sim'][-plot_xlength:])
-                    plt.ylabel('sim metric')
-                    plt.subplot(4, 1, 4)
-                    plt.plot(plot_dict['x_valid'][-plot_xlength:], plot_dict['y_auc'][-plot_xlength:])
-                    plt.xlabel('iter')
-                    plt.ylabel('auc metric')
-                    plt.savefig(os.path.join(plot_figure_dir, "plot"+str(step)+".png"))
-                    plt.clf()
 
-
-                # print training step
             if step % 4000 == 0:
-                saver.save(sess, os.path.join(model_save_dir, 'p3d_with_gn_svsd_model_' + str(step) + '.ckpt'))
+                saver.save(sess, os.path.join(model_save_dir, 'p3d_' + str(step) + '.ckpt'))
         print 'Training Finished!'
 
-        
-        print 'Training Finished!'
 
-train_STSM()
+train()

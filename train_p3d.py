@@ -36,9 +36,9 @@ def get_arguments():
     parser.add_argument('--saved_model', type=str, default=None, help='finetune using SGD')
 
     parser.add_argument('--trainingexampleprops',type=float, default=0.9, help='training dataset.')
-    parser.add_argument('--trainingbase',type=str, default='svsd', help='training dataset.')
+    parser.add_argument('--trainingbase',type=str, default='svsd', help='svsd/dhf1k.')
     parser.add_argument('--videolength',type=int,default=16, help='length of video')
-    parser.add_argument('--overlap',type=int,default=15, help='dataset overlap')
+    parser.add_argument('--overlap',type=int,default=8, help='dataset overlap')
     parser.add_argument('--batch',type=int,default=2, help='length of video')
     parser.add_argument('--imagesize', type=tuple, default=(112,112))
     parser.add_argument('--gpu', type=str, default="0")
@@ -56,7 +56,6 @@ def output_message(args, saved_dir):
     print "##############################"
     print "  Output the Training Config  "
     print "##############################"
-
     print "Structure             : ", args.structure
     print "Training datasets     : ", args.trainingbase
     print "Valid Iter            : ", args.validiter
@@ -75,14 +74,20 @@ args = get_arguments()
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 print ("Loading data...")
-LeftPath = '../svsd/train/left_view_svsd/'
-RightPath = '../svsd/train/right_view_svsd/'
-GtPath = '../svsd/train/left_density_svsd/'
+Dataset = args.trainingbase
+if Dataset=='svsd':
+    LeftPath = '../svsd/test/left_view_svsd/'
+    RightPath = '../svsd/test/right_view_svsd/'
+    GtPath = '../svsd/test/view_svsd_density/'
+elif Dataset == 'dhf1k':
+    LeftPath = '/data/SaliencyDataset/Video/DHF1K/frames/'
+    GtPath = '/data/SaliencyDataset/Video/DHF1K/density/'
+    
 
 # train_frame_basedir = '../svsd/test/left_view_svsd'
 # train_density_basedir = '../svsd/test/view_svsd_density/'
 videodataset = VideoDataset(LeftPath,GtPath, video_length=16, img_size=(112,112), bgr_mean_list=[98,102,90], sort='rgb')
-videodataset.setup_video_dataset_p3d(overlap=15, training_example_props=0.9)
+videodataset.setup_video_dataset_p3d(overlap=args.overlap, training_example_props=0.9)
 videodataset.get_frame_p3d_tf()
 df = ImageFromFile(videodataset.final_train_list)
 df = MultiThreadMapData(
@@ -106,13 +111,13 @@ gt_df = BatchData(gt_df, args.batch, remainder=False, use_list=True)
 gt_df = PrefetchDataZMQ(gt_df, nr_proc=1)
 gt_df.reset_state()
 
-print "Using dataflow to load data..."
+print "Using dataflow to load data... It may cost a little time to create the file lists.."
 structure = args.structure
 validation_iter=args.validiter
 plot_iter = args.plotiter
 
 t = datetime.datetime.now().isoformat()[:-16]
-dir_name = structure + '_' + str(args.batch) + '_' + str(args.lr) + '_' + args.info +'_'+ t + '/'
+dir_name = Dataset+'_'+structure + '_' + str(args.batch) + '_' + str(args.lr) + '_' + args.info +'_'+ t + '/'
 model_save_dir = './model/' + dir_name
 logs_dir = './logs/' + dir_name
 mkDir(logs_dir)
@@ -136,8 +141,10 @@ def train():
     
     if structure == 'unet':
         pred=p3d.p3d_unet(x, dropout, batch_size, training)
-    elif net == 'concat': 
+    elif structure == 'concat': 
         pred=p3d.p3d_concat(x, dropout, batch_size, training)
+    elif structure == 'unet++':
+        pred=p3d.p3d_unetplusplus(x, dropout, batch_size, training)
 
     pred_reshape = tf.reshape(pred, [batch_size, 16, CROP_SIZE, CROP_SIZE])
 
@@ -192,8 +199,6 @@ def train():
             train_batch_xs, train_batch_ys = data
             _, train_loss = sess.run([train_op, loss],
                      feed_dict={x: train_batch_xs, y: train_batch_ys, dropout: 0.5, training: True})
-            plot_dict['x'].append(step)
-            plot_dict['y_loss'].append(train_loss)
             if step<50 or step % 1000 == 0:
                 result = sess.run(merged,
                                   feed_dict={x: train_batch_xs, y: train_batch_ys,
@@ -209,7 +214,7 @@ def train():
                 save_image2 = train_batch_ys[0][-1]*255.
                 final_save_image1 = save_image1
                 final_save_image2 = save_image2
-                smap_save_path = os.path.join(plot_figure_dir, 'smap_Result')
+                smap_save_path = os.path.join(logs_dir, 'smap_Result')
                 mkDir(smap_save_path)
                 smap_save_name = smap_save_path + '/' +  'step_' + str(step) + '_pred.jpg'
                 cv2.imwrite(smap_save_name, final_save_image1)
@@ -245,5 +250,5 @@ def train():
                 saver.save(sess, os.path.join(model_save_dir, 'p3d_' + str(step) + '.ckpt'))
         print 'Training Finished!'
 
-
-train()
+if __name__ == "__main__":
+    train()

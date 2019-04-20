@@ -7,7 +7,7 @@ BATCH_SIZE=12
 RGB_CHANNEL=3
 BLOCK_EXPANSION=4  #You do not need change
 
-def get_conv_weight(name,kshape,wd=0.0005):
+def get_conv_weight(name,kshape,wd=0.001):
     with tf.device('/cpu:0'):
         var=tf.get_variable(name,shape=kshape,initializer=tf.contrib.layers.xavier_initializer())
     if wd!=0:
@@ -126,9 +126,9 @@ class Bottleneck():
                                   strides=self.downsample[1],padding='SAME')
             residual=tf.layers.batch_normalization(residual,training=self.training)
         
-        # residual = attention(residual, ch=None, name='attention_{}'.format(self.id))
+        # out = attention(residual, ch=None, name='attention_{}'.format(self.id))
         # CBAM
-        # residual = cbam_block(residual, name='attention_{}'.format(self.id))
+        # out = cbam_block(residual, name='attention_{}'.format(self.id))
         # attention for out
         out+=residual
         out=tf.nn.relu(out)
@@ -275,21 +275,6 @@ def p3d_concat(_X, _dropout, batch_size=2, training=True):
     results = tf.layers.conv3d_transpose(deconv1_revise, 1, 3, 2, 'same', name='predict_revise')
     return results
 
-
-def concat(_X):
-    return tf.concat(_X, axis=-1)
-
-def conv3d(_X, channel, kernel, strides, training, name):
-    _X = tf.layers.conv3d(_X, channel, kernel, strides, 'same', name=name)
-    _X = tf.layers.batch_normalization(_X, training=training)
-    _X = tf.nn.relu(_X)
-    return _X
-
-def transpose_conv3d(_X, channel, kernel, strides, training, name):
-    _X = tf.layers.conv3d_transpose(_X, channel, kernel, strides, 'same', name=name)
-    _X = tf.layers.batch_normalization(_X, training=training)
-    _X = tf.nn.relu(_X)
-    return _X
 
 #build structure of the p3d network.
 def p3d_unetplusplus(_X,_dropout,batch_size=2, training=True):

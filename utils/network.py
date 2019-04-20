@@ -377,3 +377,18 @@ def spatial_attention(input_feature, name):
     
   return input_feature * concat
     
+
+def concat(_X):
+    return tf.concat(_X, axis=-1)
+
+def conv3d(_X, channel, kernel, strides, training, name):
+    _X = tf.layers.conv3d(_X, channel, kernel, strides, 'same', name=name)
+    _X = tf.layers.batch_normalization(_X, training=training)
+    _X = tf.nn.relu(_X)
+    return _X
+
+def transpose_conv3d(_X, channel, kernel, strides, training, name):
+    _X = tf.layers.conv3d_transpose(_X, channel, kernel, strides, 'same', name=name)
+    _X = tf.layers.batch_normalization(_X, training=training)
+    _X = tf.nn.relu(_X)
+    return _X

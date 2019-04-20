@@ -23,17 +23,21 @@ def get_arguments():
     parser.add_argument('--structure', type=str, default='unet', help="unet/concat")
     parser.add_argument('--plotiter', type=int, default=1000, help='training mini batch')
     parser.add_argument('--validiter', type=int, default=12000, help='training mini batch')
-    parser.add_argument('--savemodeliter', type=int, default=1500, help='training mini batch')
-    parser.add_argument('--saved_model', type=str, default=None, help='finetune using SGD')
+    parser.add_argument('--saveiter', type=int, default=4000, help='training mini batch')
+    parser.add_argument('--pretrain', type=str, default=None, help='finetune using SGD')
 
-    parser.add_argument('--trainingexampleprops',type=float, default=0.9, help='training dataset.')
-    parser.add_argument('--trainingbase',type=str, default='dhf1k', help='svsd/dhf1k.')
-    parser.add_argument('--videolength',type=int,default=16, help='length of video')
-    parser.add_argument('--overlap',type=int,default=8, help='dataset overlap')
-    parser.add_argument('--batch',type=int,default=2, help='length of video')
+    parser.add_argument('--trainingprops',type=float, default=0.9, help='')
+    parser.add_argument('--dataset',type=str, default='dhf1k', help='svsd/dhf1k.')
+    parser.add_argument('--videolength',type=int,default=16, help='16 in this network')
+    parser.add_argument('--overlap',type=int,default=8, help='0 to videolength')
     parser.add_argument('--imagesize', type=tuple, default=(112,112))
-    parser.add_argument('--gpu', type=str, default="0")
+
+    
+    parser.add_argument('--normalization',type=str,default='BN', help='Using BatchNormalization or Group Normalization (BN/GN)')
+    parser.add_argument('--SA',type=bool,default=True, help='Using self-attention mechanism or not (True/False)')
+    parser.add_argument('--batch',type=int,default=2, help='length of video')
     parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--gpu', type=str, default="0")
     
     
     parser.add_argument('--info', type=str, default='', help="add extra model information")
@@ -44,33 +48,35 @@ def mkDir(dirpath):
         os.mkdir(dirpath)
 
 def output_message(args, saved_dir):
-    print "##############################"
+    print "##########################################"
     print "  Output the Training Config  "
-    print "##############################"
+    print "##########################################"
     print "Structure             : ", args.structure
-    print "Training datasets     : ", args.trainingbase
+    print "Training dataset      : ", args.dataset
     print "Valid Iter            : ", args.validiter
-    print "Save Iter             : ", args.savemodeliter
+    print "Save Iter             : ", args.saveiter
     print "Batch Size            : ", args.batch
     print "Input Tensor          :  (%d, %d, %d, %d, 3)" % (args.batch, args.videolength, args.imagesize[0], args.imagesize[1])
     print "Initial Learning Rate : ", args.lr
-    print "Training Example Prop : ", args.trainingexampleprops
+    print "Training Example Prop : ", args.trainingprops
+    print ""
     print "GPU                   : ", args.gpu
+    print "Info                  : ", args.info
     print "Saved Dir             : ", saved_dir
     print ""
-    print "##############################"
+    print "##########################################"
 
 print "Parsing arguments..."
 args = get_arguments()
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 print ("Loading data...")
-Dataset = args.trainingbase
-if Dataset=='svsd':
+dataset = args.dataset
+if dataset=='svsd':
     LeftPath = '../svsd/test/left_view_svsd/'
     RightPath = '../svsd/test/right_view_svsd/'
     GtPath = '../svsd/test/view_svsd_density/'
-elif Dataset == 'dhf1k':
+elif dataset == 'dhf1k':
     LeftPath = '/data/SaliencyDataset/Video/DHF1K/frames/'
     GtPath = '/data/SaliencyDataset/Video/DHF1K/density/'
     
@@ -106,9 +112,9 @@ print "Using dataflow to load data... It may cost a little time to create the fi
 structure = args.structure
 validation_iter=args.validiter
 plot_iter = args.plotiter
-
+save_iter = args.saveiter
 t = datetime.datetime.now().isoformat()[:-16]
-dir_name = Dataset+'_'+structure + '_' + str(args.batch) + '_' + str(args.lr) + '_' + args.info +'_'+ t + '/'
+dir_name = dataset+'_'+structure + '_' + str(args.batch) + '_' + str(args.lr) + '_' + args.info +'_'+ t + '/'
 model_save_dir = './model/' + dir_name
 logs_dir = './logs/' + dir_name
 mkDir(logs_dir)
@@ -125,7 +131,6 @@ def train():
         with tf.name_scope('inputs'):
             x = tf.placeholder(tf.float32, [batch_size, frames, CROP_SIZE, CROP_SIZE, 3])
             y = tf.placeholder(tf.float32, [batch_size, 16, CROP_SIZE, CROP_SIZE])
-            y_valid = tf.placeholder(tf.float32, [batch_size, 1, CROP_SIZE, CROP_SIZE])
             training = tf.placeholder(tf.bool)
             dropout = tf.placeholder(tf.float32)
     
@@ -144,7 +149,9 @@ def train():
         # loss1 = tf.reduce_mean(tf.reduce_sum(tf.abs(pred_reshape-y)))
         # wd_loss = tf.reduce_mean(tf.get_collection('weightdecay_losses'))
         loss = loss1
-        tf.summary.scalar('loss', loss)
+        # +wd_loss
+        # tf.summary.scalar('wd_loss', wd_loss)
+        tf.summary.scalar('total_loss', loss)
 
     with tf.name_scope('train'):
         lr = args.lr
@@ -171,9 +178,9 @@ def train():
         sess.run(init)
 
         # fine-tuning
-        if args.saved_model:
-            print args.saved_model, "Using this model to retrain..."
-            ckpt = tf.train.get_checkpoint_state('./model/'+args.saved_model+'/')
+        if args.pretrain:
+            print args.pretrain, "Using this model to retrain..."
+            ckpt = tf.train.get_checkpoint_state('./model/'+args.pretrain+'/')
             if ckpt and ckpt.model_checkpoint_path:
                 print("loading checkpoint %s,waiting......" % ckpt.model_checkpoint_path)
                 saver.restore(sess, ckpt.model_checkpoint_path)
@@ -237,7 +244,7 @@ def train():
                 tmp_auc = np.array(tmp_auc)[~np.isnan(tmp_auc)]
                 print datetime.datetime.now().isoformat()[:-7], " Step:", step, " Metrics:", np.mean(tmp_cc), np.mean(tmp_sim), np.mean(tmp_auc)
 
-            if step % 4000 == 0:
+            if step % save_iter == 0:
                 saver.save(sess, os.path.join(model_save_dir, 'p3d_' + str(step) + '.ckpt'))
         print 'Training Finished!'
 

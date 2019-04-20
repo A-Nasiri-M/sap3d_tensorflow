@@ -22,25 +22,30 @@ CROP_SIZE = 112
 def get_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--structure', type=str, default='unet', help="unet/concat")
-    parser.add_argument('--use_snapshot', type=str, default='', help='Snapshot path.')
-    parser.add_argument('--plotiter', type=int, default=500, help='training mini batch')
-    parser.add_argument('--validiter', type=int, default=4000, help='training mini batch')
-    parser.add_argument('--model', type=str, default="", help='saved model name')
+    parser.add_argument('--plotiter', type=int, default=1000, help='training mini batch')
+    parser.add_argument('--validiter', type=int, default=12000, help='training mini batch')
+    parser.add_argument('--saveiter', type=int, default=4000, help='training mini batch')
+    parser.add_argument('--pretrain', type=str, default=None, help='finetune using SGD')
 
-    parser.add_argument('--trainingexampleprops',type=float, default=0.9, help='training dataset.')
-    parser.add_argument('--trainingbase',type=str, default='svsd', help='svsd/dhf1k')
-    parser.add_argument('--videolength',type=int,default=16, help='length of video')
-    parser.add_argument('--overlap',type=int,default=15, help='dataset overlap')
-    parser.add_argument('--batch',type=int,default=2, help='length of video')
+    parser.add_argument('--trainingprops',type=float, default=0.9, help='')
+    parser.add_argument('--dataset',type=str, default='dhf1k', help='svsd/dhf1k.')
+    parser.add_argument('--videolength',type=int,default=16, help='16 in this network')
+    parser.add_argument('--overlap',type=int,default=8, help='0 to videolength')
     parser.add_argument('--imagesize', type=tuple, default=(112,112))
+
+    
+    parser.add_argument('--normalization',type=str,default='BN', help='Using BatchNormalization or Group Normalization (BN/GN)')
+    parser.add_argument('--SA',type=bool,default=True, help='Using self-attention mechanism or not (True/False)')
+    parser.add_argument('--batch',type=int,default=2, help='length of video')
+    parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--gpu', type=str, default="0")
     
-    parser.add_argument('--extramodinfo', type=str, default='', help="add extra model information")
+    
+    parser.add_argument('--info', type=str, default='', help="add extra model information")
     return parser.parse_args()
 
 def generate_saliency(pred_patch_smap):
-    # pred_patch_l shape: [patch_no, 224, 224, 1]
-    boxsize=224
+    boxsize=112
     patches=pred_patch_smap.shape[0]
 
     pa1 = int(math.ceil(1080 / boxsize)+1)
@@ -64,20 +69,19 @@ def mkDir(dirpath):
 args = get_arguments()
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-print ("Loading data...")
-Dataset = args.trainingbase
-if Dataset=='svsd':
+dataset = args.dataset
+if dataset=='svsd':
     LeftPath = '../svsd/test/left_view_svsd/'
     RightPath = '../svsd/test/right_view_svsd/'
     GtPath = '../svsd/test/view_svsd_density/'
-elif Dataset == 'dhf1k':
+elif dataset == 'dhf1k':
     LeftPath = '/data/SaliencyDataset/Video/DHF1K/frames/'
     GtPath = '/data/SaliencyDataset/Video/DHF1K/density/'
     
 
 batch_size=args.batch
 videodataset = VideoDataset(LeftPath,GtPath, video_length=16, img_size=(112,112), bgr_mean_list=[98,102,90], sort='rgb')
-videodataset.setup_video_dataset_p3d(overlap=15, training_example_props=0)
+videodataset.setup_video_dataset_p3d(overlap=args.overlap, training_example_props=0)
 videodataset.get_frame_p3d_tf()
 # valid
 gt_df = ImageFromFile(videodataset.final_valid_list)
@@ -96,8 +100,7 @@ validation_iter=args.validiter
 plot_iter = args.plotiter
 
 
-batch_size = args.batch  # train images=batch_size*frames
-frames = 16  # 3 frames
+frames = 16
 with tf.device('/cpu:0'):
     with tf.name_scope('inputs'):
         x = tf.placeholder(tf.float32, [batch_size, frames, CROP_SIZE, CROP_SIZE, 3])
@@ -111,9 +114,8 @@ modelList=[
     # 'concate_2_0.0001__2019-04-20',
     'unet++_2_0.0001__2019-04-20'
 ]
-modelTotalNumber = len(modelList)
 
-for modelNumber in range(modelTotalNumber):
+for modelNumber in range(len(modelList)):
     structure = modelList[modelNumber].split('_')[0]
     if structure == 'unet':
         pred=p3d.p3d_unet(x, dropout, batch_size, training)

@@ -1,5 +1,5 @@
 import tensorflow as tf
-from network import *
+from utils.network import *
 # from settings import *
 CROP_SIZE=112  
 NUM_FRAMES_PER_CLIP=16  #clip length

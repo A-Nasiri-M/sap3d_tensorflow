@@ -1,27 +1,18 @@
-# -*- coding:utf-8 -*-
+# coding = utf-8
 import tensorflow as tf
 import sys
 import os
-import p3d
-import matplotlib
+
+import cv2, math, time, argparse, numpy as np, matplotlib, datetime
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from network import *
-import argparse
-# from datetime import datetime
-import cv2
-import datetime
-import time
 from tensorpack.dataflow import *
 from tensorpack.dataflow.imgaug import *
 from dataflow import VideoDataset, ImageFromFile, mapf
-import numpy as np
-from metrics import CC, SIM, AUC_Judd
-from tensorpack.input_source import QueueInput, BatchQueueInput, StagingInput
+from utils.network import *
+from utils.metrics import CC, SIM, AUC_Judd, KLdiv, NSS, AUC_Borji
 
-import numpy as np
-from metrics import CC, SIM, AUC_Judd
-
+import p3d
 
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
@@ -36,7 +27,7 @@ def get_arguments():
     parser.add_argument('--saved_model', type=str, default=None, help='finetune using SGD')
 
     parser.add_argument('--trainingexampleprops',type=float, default=0.9, help='training dataset.')
-    parser.add_argument('--trainingbase',type=str, default='svsd', help='svsd/dhf1k.')
+    parser.add_argument('--trainingbase',type=str, default='dhf1k', help='svsd/dhf1k.')
     parser.add_argument('--videolength',type=int,default=16, help='length of video')
     parser.add_argument('--overlap',type=int,default=8, help='dataset overlap')
     parser.add_argument('--batch',type=int,default=2, help='length of video')

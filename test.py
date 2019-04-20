@@ -3,23 +3,17 @@ import tensorflow as tf
 import sys
 import os
 
-import p3d
-from network import *
+import cv2, math, time, argparse, numpy as np, matplotlib
 from datetime import datetime
-import cv2
-import math
-import datetime
-import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import argparse
-import time
 from tensorpack.dataflow import *
 from tensorpack.dataflow.imgaug import *
 from dataflow import VideoDataset, ImageFromFile, mapf
-import numpy as np
-from metrics import CC, SIM, AUC_Judd, KLdiv, NSS, AUC_Borji
+from utils.network import *
+from utils.metrics import CC, SIM, AUC_Judd, KLdiv, NSS, AUC_Borji
 
+import p3d
 
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True

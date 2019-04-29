@@ -126,7 +126,7 @@ class Bottleneck():
                                   strides=self.downsample[1],padding='SAME')
             residual=tf.layers.batch_normalization(residual,training=self.training)
         
-        # out = attention(residual, ch=None, name='attention_{}'.format(self.id))
+        # residual = non_local(residual, name='attention_{}'.format(self.id), training=self.training)
         # CBAM
         # out = cbam_block(residual, name='attention_{}'.format(self.id))
         # attention for out
@@ -277,7 +277,7 @@ def p3d_concat(_X, _dropout, batch_size=2, training=True):
 
 
 #build structure of the p3d network.
-def p3d_unetplusplus(_X,_dropout,batch_size=2, training=True):
+def p3d_unetplusplus(_X,_dropout,batch_size=2, training=True, SA=False):
     cnt=0
     # 16 112 112 3
     conv1_custom=tf.nn.conv3d(_X,get_conv_weight('firstconv1',[1,7,7,3,64]),strides=[1,1,2,2,1],padding='SAME')
@@ -305,25 +305,219 @@ def p3d_unetplusplus(_X,_dropout,batch_size=2, training=True):
     cnt=b3.cnt
     x_4_0=tf.nn.max_pool3d(res3,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
     # 1 7 7 1024
-    ###
+
+    # Self attention
+    # if SA:
+    x_4_0 = attention(x_4_0, 'x_4_0_sa', training=training, subsample=False)
+    ##
     ### Deconvoltuion
     ###
     upx_4_0 = transpose_conv3d(x_4_0, 512, [1, 3, 3], [2, 2, 2], training, 'upx_4_0')
     x_3_1 = conv3d(concat([x_3_0, upx_4_0]), 512, [2, 3, 3], [1, 1, 1], training, 'x_3_1')
-
+    # if SA:
+    x_3_1 = attention(x_3_1, 'x_3_1_sa', training=training, subsample=False)
     upx_3_0 = transpose_conv3d(x_3_0, 256, [2, 3, 3], [2, 2, 2], training, 'upx_3_0')
     x_2_1 = conv3d(concat([x_2_0, upx_3_0]), 256, [3, 3, 3], [1, 1, 1], training, 'x_2_1')
     upx_3_1 = transpose_conv3d(x_3_1, 256, [2, 3, 3], [2, 2, 2], training, 'upx_3_1')
     x_2_2 = conv3d(concat([x_2_1, upx_3_1]), 256, [3, 3, 3], [1, 1, 1], training, 'x_2_2')
-
+    # if SA:
+    x_2_2 = attention(x_2_2, 'x_2_2_sa', training=training, subsample=False)
     upx_2_0 = transpose_conv3d(x_2_0, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_0')
     x_1_1 = conv3d(concat([x_1_0, upx_2_0]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_1')
     upx_2_1 = transpose_conv3d(x_2_1, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_1')
     x_1_2 = conv3d(concat([x_1_1, upx_2_1]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_2')
     upx_2_2 = transpose_conv3d(x_2_2, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_2')
     x_1_3 = conv3d(concat([x_1_2, upx_2_2]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_3')
+    x_1_3 = attention(x_1_3, 'x_1_3_sa', training=training, subsample=True)
+    # x_1_3 = tf.layers.dropout(x_1_3, _dropout, training=training)
+    x_0_1 = tf.layers.conv3d_transpose(x_1_3, 16, 3, 2, 'same', name='x_0_1')
+    x_0_1 = attention(x_0_1, 'x_0_1_sa', training=training, subsample=True, sub_size=4)
+    x_0_1 = tf.layers.dropout(x_0_1, _dropout, training=training)
+    x_0_1 = tf.layers.conv3d(x_0_1, 1, 1, 1, 'same', name='result')
+    x_0_1 = tf.sigmoid(x_0_1)
+    return x_0_1
 
+def p3d_unetplusplus_ds(_X,_dropout,batch_size=2, training=True, SA=False):
+    cnt=0
+    # 16 112 112 3
+    conv1_custom=tf.nn.conv3d(_X,get_conv_weight('firstconv1',[1,7,7,3,64]),strides=[1,1,2,2,1],padding='SAME')
+    conv1_custom_bn=tf.layers.batch_normalization(conv1_custom,training=training)
+    conv1_custom_bn_relu=tf.nn.relu(conv1_custom_bn)
+    # 16 56 56 64
+    x_1_0=tf.nn.max_pool3d(conv1_custom_bn_relu,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    pool1=tf.nn.max_pool3d(conv1_custom_bn_relu,[1,2,3,3,1],strides=[1,2,2,2,1],padding='SAME')
+    # 8 28 28 64
+    b1=make_block(pool1,64,3,64,cnt)
+    res1=b1.infer()
+    # 8 28 28 256
+    cnt=b1.cnt
+    x_2_0=tf.nn.max_pool3d(res1,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 4 28 28 256
+    b2=make_block(x_2_0,128,8,256,cnt,stride=2)
+    res2=b2.infer()
+    # 4 14 14 512 
+    cnt=b2.cnt
+    x_3_0=tf.nn.max_pool3d(res2,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 2 14 14 512
+    b3=make_block(x_3_0,256,36,512,cnt,stride=2)
+    res3=b3.infer()
+    # 2 7 7 1024
+    cnt=b3.cnt
+    x_4_0=tf.nn.max_pool3d(res3,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 1 7 7 1024
+
+    # Self attention
+    # if SA:
+    x_4_0 = attention(x_4_0, 'x_4_0_sa', training=training, subsample=False)
+    ##
+    ### Deconvoltuion
+    ###
+    upx_4_0 = transpose_conv3d(x_4_0, 512, [1, 3, 3], [2, 2, 2], training, 'upx_4_0')
+    x_3_1 = conv3d(concat([x_3_0, upx_4_0]), 512, [2, 3, 3], [1, 1, 1], training, 'x_3_1')
+    # if SA:
+    x_3_1 = attention(x_3_1, 'x_3_1_sa', training=training, subsample=False)
+    upx_3_0 = transpose_conv3d(x_3_0, 256, [2, 3, 3], [2, 2, 2], training, 'upx_3_0')
+    x_2_1 = conv3d(concat([x_2_0, upx_3_0]), 256, [3, 3, 3], [1, 1, 1], training, 'x_2_1')
+    upx_3_1 = transpose_conv3d(x_3_1, 256, [2, 3, 3], [2, 2, 2], training, 'upx_3_1')
+    x_2_2 = conv3d(concat([x_2_1, upx_3_1]), 256, [3, 3, 3], [1, 1, 1], training, 'x_2_2')
+    # if SA:
+    x_2_2 = attention(x_2_2, 'x_2_2_sa', training=training, subsample=False)
+    upx_2_0 = transpose_conv3d(x_2_0, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_0')
+    x_1_1 = conv3d(concat([x_1_0, upx_2_0]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_1')
+    upx_2_1 = transpose_conv3d(x_2_1, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_1')
+    x_1_2 = conv3d(concat([x_1_1, upx_2_1]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_2')
+    upx_2_2 = transpose_conv3d(x_2_2, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_2')
+    x_1_3 = conv3d(concat([x_1_2, upx_2_2]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_3')
+    x_1_3 = attention(x_1_3, 'x_1_3_sa', training=training, subsample=True)
     x_1_3 = tf.layers.dropout(x_1_3, _dropout, training=training)
     x_0_1 = tf.layers.conv3d_transpose(x_1_3, 1, 3, 2, 'same', name='x_0_1')
+    # x_0_1 = attention(x_0_1, 'x_0_1_sa', training=training, subsample=True, sub_size=4)
+    # x_0_1 = tf.layers.dropout(x_0_1, _dropout, training=training)
+    # x_0_1 = tf.layers.conv3d(x_0_1, 1, 1, 1, 'same', name='result')
+    x_0_1 = tf.sigmoid(x_0_1)
+    print "this is fake downsample"
+    return x_0_1
+#build structure of the p3d network.
+def p3d_unetplusplus_nonsa(_X,_dropout,batch_size=2, training=True, SA=False):
+    cnt=0
+    # 16 112 112 3
+    conv1_custom=tf.nn.conv3d(_X,get_conv_weight('firstconv1',[1,7,7,3,64]),strides=[1,1,2,2,1],padding='SAME')
+    conv1_custom_bn=tf.layers.batch_normalization(conv1_custom,training=training)
+    conv1_custom_bn_relu=tf.nn.relu(conv1_custom_bn)
+    # 16 56 56 64
+    x_1_0=tf.nn.max_pool3d(conv1_custom_bn_relu,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    pool1=tf.nn.max_pool3d(conv1_custom_bn_relu,[1,2,3,3,1],strides=[1,2,2,2,1],padding='SAME')
+    # 8 28 28 64
+    b1=make_block(pool1,64,3,64,cnt)
+    res1=b1.infer()
+    # 8 28 28 256
+    cnt=b1.cnt
+    x_2_0=tf.nn.max_pool3d(res1,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 4 28 28 256
+    b2=make_block(x_2_0,128,8,256,cnt,stride=2)
+    res2=b2.infer()
+    # 4 14 14 512 
+    cnt=b2.cnt
+    x_3_0=tf.nn.max_pool3d(res2,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 2 14 14 512
+    b3=make_block(x_3_0,256,36,512,cnt,stride=2)
+    res3=b3.infer()
+    # 2 7 7 1024
+    cnt=b3.cnt
+    x_4_0=tf.nn.max_pool3d(res3,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 1 7 7 1024
 
+    # Self attention
+    # if SA:
+    # x_4_0 = attention(x_4_0, 'x_4_0_sa', training=training, subsample=False)
+    ##
+    ### Deconvoltuion
+    ###
+    upx_4_0 = transpose_conv3d(x_4_0, 512, [1, 3, 3], [2, 2, 2], training, 'upx_4_0')
+    x_3_1 = conv3d(concat([x_3_0, upx_4_0]), 512, [2, 3, 3], [1, 1, 1], training, 'x_3_1')
+    # if SA:
+    # x_3_1 = attention(x_3_1, 'x_3_1_sa', training=training, subsample=False)
+    upx_3_0 = transpose_conv3d(x_3_0, 256, [2, 3, 3], [2, 2, 2], training, 'upx_3_0')
+    x_2_1 = conv3d(concat([x_2_0, upx_3_0]), 256, [3, 3, 3], [1, 1, 1], training, 'x_2_1')
+    upx_3_1 = transpose_conv3d(x_3_1, 256, [2, 3, 3], [2, 2, 2], training, 'upx_3_1')
+    x_2_2 = conv3d(concat([x_2_1, upx_3_1]), 256, [3, 3, 3], [1, 1, 1], training, 'x_2_2')
+    # if SA:
+    # x_2_2 = attention(x_2_2, 'x_2_2_sa', training=training, subsample=False)
+    upx_2_0 = transpose_conv3d(x_2_0, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_0')
+    x_1_1 = conv3d(concat([x_1_0, upx_2_0]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_1')
+    upx_2_1 = transpose_conv3d(x_2_1, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_1')
+    x_1_2 = conv3d(concat([x_1_1, upx_2_1]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_2')
+    upx_2_2 = transpose_conv3d(x_2_2, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_2')
+    x_1_3 = conv3d(concat([x_1_2, upx_2_2]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_3')
+    # x_1_3 = attention(x_1_3, 'x_1_3_sa', training=training, subsample=True)
+    x_1_3 = tf.layers.dropout(x_1_3, _dropout, training=training)
+    x_0_1 = tf.layers.conv3d_transpose(x_1_3, 1, 3, 2, 'same', name='x_0_1')
+    # x_0_1 = attention(x_0_1, 'x_0_1_sa', training=training, subsample=True, sub_size=4)
+    # x_0_1 = tf.layers.dropout(x_0_1, _dropout, training=training)
+    # x_0_1 = tf.layers.conv3d(x_0_1, 1, 1, 1, 'same', name='result')
+    x_0_1 = tf.sigmoid(x_0_1)
+    return x_0_1
+
+def p3d_unetplusplus_nl(_X,_dropout,batch_size=2, training=True, SA=False):
+    cnt=0
+    # 16 112 112 3
+    conv1_custom=tf.nn.conv3d(_X,get_conv_weight('firstconv1',[1,7,7,3,64]),strides=[1,1,2,2,1],padding='SAME')
+    conv1_custom_bn=tf.layers.batch_normalization(conv1_custom,training=training)
+    conv1_custom_bn_relu=tf.nn.relu(conv1_custom_bn)
+    # 16 56 56 64
+    x_1_0=tf.nn.max_pool3d(conv1_custom_bn_relu,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    pool1=tf.nn.max_pool3d(conv1_custom_bn_relu,[1,2,3,3,1],strides=[1,2,2,2,1],padding='SAME')
+    # 8 28 28 64
+    b1=make_block(pool1,64,3,64,cnt)
+    res1=b1.infer()
+    # 8 28 28 256
+    cnt=b1.cnt
+    x_2_0=tf.nn.max_pool3d(res1,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 4 28 28 256
+    b2=make_block(x_2_0,128,8,256,cnt,stride=2)
+    res2=b2.infer()
+    # 4 14 14 512 
+    cnt=b2.cnt
+    x_3_0=tf.nn.max_pool3d(res2,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 2 14 14 512
+    b3=make_block(x_3_0,256,36,512,cnt,stride=2)
+    res3=b3.infer()
+    # 2 7 7 1024
+    cnt=b3.cnt
+    x_4_0=tf.nn.max_pool3d(res3,[1,2,1,1,1],strides=[1,2,1,1,1],padding='SAME')
+    # 1 7 7 1024
+
+    # Self attention
+    # if SA:
+    x_4_0 = attention(x_4_0, 'x_4_0_sa')
+    x_4_0 = non_local(x_4_0, 'x_4_0_nl', training, sub_sample=False)
+    ##
+    ### Deconvoltuion
+    ###
+    upx_4_0 = transpose_conv3d(x_4_0, 512, [1, 3, 3], [2, 2, 2], training, 'upx_4_0')
+    x_3_1 = conv3d(concat([x_3_0, upx_4_0]), 512, [2, 3, 3], [1, 1, 1], training, 'x_3_1')
+    # if SA:
+    x_3_1 = attention(x_3_1, 'x_3_1_sa')
+    x_3_1 = non_local(x_3_1, 'x_3_1_nl', training, sub_sample=False)
+    upx_3_0 = transpose_conv3d(x_3_0, 256, [2, 3, 3], [2, 2, 2], training, 'upx_3_0')
+    x_2_1 = conv3d(concat([x_2_0, upx_3_0]), 256, [3, 3, 3], [1, 1, 1], training, 'x_2_1')
+    upx_3_1 = transpose_conv3d(x_3_1, 256, [2, 3, 3], [2, 2, 2], training, 'upx_3_1')
+    x_2_2 = conv3d(concat([x_2_1, upx_3_1]), 256, [3, 3, 3], [1, 1, 1], training, 'x_2_2')
+    # if SA:
+    x_2_2 = attention(x_2_2, 'x_2_2_sa')
+    x_2_2 = non_local(x_2_2, 'x_2_2_nl', training, sub_sample=False)
+    upx_2_0 = transpose_conv3d(x_2_0, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_0')
+    x_1_1 = conv3d(concat([x_1_0, upx_2_0]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_1')
+    upx_2_1 = transpose_conv3d(x_2_1, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_1')
+    x_1_2 = conv3d(concat([x_1_1, upx_2_1]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_2')
+    upx_2_2 = transpose_conv3d(x_2_2, 128, [3, 3, 3], [2, 2, 2], training, 'upx_2_2')
+    x_1_3 = conv3d(concat([x_1_2, upx_2_2]), 128, [3, 3, 3], [1, 1, 1], training, 'x_1_3')
+    # x_1_3 = attention(x_1_3, 'x_1_3_sa', subsample=True)
+    x_1_3 = non_local(x_1_3, 'x_1_3_nl', training, sub_sample=True)
+    # x_1_3 = tf.layers.dropout(x_1_3, _dropout, training=training)
+    x_0_1 = tf.layers.conv3d_transpose(x_1_3, 1, 3, 2, 'same', name='x_0_1')
+    x_0_1 = non_local(x_0_1, 'x_0_1_nl', training, sub_sample=True)
+    x_0_1 = tf.layers.dropout(x_0_1, _dropout, training=training)
+    x_0_1 = tf.layers.conv3d(x_0_1, 1, 1,12, 'same', name='x_0_1_final')
+    x_0_1 = tf.sigmoid(x_0_1)
     return x_0_1

@@ -22,14 +22,15 @@ def get_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--structure', type=str, default='unet', help="unet/concat")
     parser.add_argument('--plotiter', type=int, default=1000, help='training mini batch')
-    parser.add_argument('--validiter', type=int, default=12000, help='training mini batch')
+    parser.add_argument('--validiter', type=int, default=160000, help='training mini batch')
     parser.add_argument('--saveiter', type=int, default=4000, help='training mini batch')
     parser.add_argument('--pretrain', type=str, default=None, help='finetune using SGD')
 
-    parser.add_argument('--trainingprops',type=float, default=0.9, help='')
-    parser.add_argument('--dataset',type=str, default='dhf1k', help='svsd/dhf1k.')
+    parser.add_argument('--trainingprops',type=float, default=0.99, help='')
+    parser.add_argument('--epoch', type=int, default=4, help='')
+    parser.add_argument('--dataset',type=str, default='svsdndhf1k', help='svsd/dhf1k.')
     parser.add_argument('--videolength',type=int,default=16, help='16 in this network')
-    parser.add_argument('--overlap',type=int,default=8, help='0 to videolength')
+    parser.add_argument('--overlap',type=int,default=15, help='0 to videolength')
     parser.add_argument('--imagesize', type=tuple, default=(112,112))
 
     
@@ -73,34 +74,43 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 print ("Loading data...")
 dataset = args.dataset
 if dataset=='svsd':
-    LeftPath = '../svsd/test/left_view_svsd/'
-    RightPath = '../svsd/test/right_view_svsd/'
-    GtPath = '../svsd/test/view_svsd_density/'
+    frame_path = ['/data/lishikai/svsd/train/left_view_svsd/']
+    density_path = ['/data/lishikai/svsd/train/left_density_svsd/']
+    # fixation_path = '/data/lishikai/svsd/test/left_fixation_svsd/'
 elif dataset == 'dhf1k':
-    LeftPath = '/data/SaliencyDataset/Video/DHF1K/frames/'
-    GtPath = '/data/SaliencyDataset/Video/DHF1K/density/'
+    frame_path = ['/data/SaliencyDataset/Video/DHF1K/frames/']
+    density_path = ['/data/SaliencyDataset/Video/DHF1K/density/']
+elif dataset == 'svsdndhf1k':
+    frame_path = [
+        '/data/lishikai/svsd/train/left_view_svsd/', 
+        '/data/SaliencyDataset/Video/DHF1K/frames/'
+        ]
+    density_path = [
+            '/data/lishikai/svsd/train/left_density_svsd/',
+            '/data/SaliencyDataset/Video/DHF1K/density/'
+        ]
     
 
 # train_frame_basedir = '../svsd/test/left_view_svsd'
 # train_density_basedir = '../svsd/test/view_svsd_density/'
-videodataset = VideoDataset(LeftPath,GtPath, video_length=16, img_size=(112,112), bgr_mean_list=[98,102,90], sort='rgb')
+videodataset = VideoDataset(frame_path,density_path, video_length=16, img_size=(112,112), bgr_mean_list=[98,102,90], sort='rgb')
 videodataset.setup_video_dataset_p3d(overlap=args.overlap, training_example_props=0.9)
 videodataset.get_frame_p3d_tf()
 df = ImageFromFile(videodataset.final_train_list)
 df = MultiThreadMapData(
-    df, nr_thread=16,
+    df, nr_thread=32,
     map_func=mapf,
     buffer_size=1000,
     strict=True)
 df = BatchData(df, args.batch, remainder=False, use_list=True)
 df = PrefetchDataZMQ(df, nr_proc=1)
-df = RepeatedData(df, -1)
+df = RepeatedData(df, args.epoch)
 df.reset_state()
 
 # valid
 gt_df = ImageFromFile(videodataset.final_valid_list)
 gt_df = MultiThreadMapData(
-    gt_df, nr_thread=16,
+    gt_df, nr_thread=32,
     map_func=mapf,
     buffer_size=1000,
     strict=True)
@@ -125,6 +135,7 @@ output_message(args, model_save_dir)
 
 def train():
     batch_size = args.batch  # train images=batch_size*frames
+    sa = args.SA
     frames = 16  # 3 frames
     Dataset='svsd'
     with tf.device('/cpu:0'):
@@ -140,7 +151,7 @@ def train():
     elif structure == 'concat': 
         pred=p3d.p3d_concat(x, dropout, batch_size, training)
     elif structure == 'unet++':
-        pred=p3d.p3d_unetplusplus(x, dropout, batch_size, training)
+        pred=p3d.p3d_unetplusplus(x, dropout, batch_size, training, sa)
 
     pred_reshape = tf.reshape(pred, [batch_size, 16, CROP_SIZE, CROP_SIZE])
 
@@ -148,8 +159,7 @@ def train():
         loss1 = smooth_l1_loss(pred_reshape, y, 1, 1, sigma=1.0)
         # loss1 = tf.reduce_mean(tf.reduce_sum(tf.abs(pred_reshape-y)))
         # wd_loss = tf.reduce_mean(tf.get_collection('weightdecay_losses'))
-        loss = loss1
-        # +wd_loss
+        loss = loss1 # +wd_loss
         # tf.summary.scalar('wd_loss', wd_loss)
         tf.summary.scalar('total_loss', loss)
 
@@ -174,6 +184,19 @@ def train():
         var_list += bn_moving_vars
         saver = tf.train.Saver(var_list=var_list, max_to_keep=10)
 
+        # load pretrain
+        # rgb_variable_map = {}
+        # for variable in tf.global_variables():
+        #     print variable.name
+        # exit()
+        # if variable.name.split('/')[0] == 'RGB' and 'Adadelta' not in variable.name.split('/')[-1] \
+        #     and variable.name.split('/')[2] != 'Upsampling' \
+        #     and 'deconv' not in variable.name.split('/')[2] :
+        #     # and 'Mixed_4' not in variable.name.split('/')[2]:
+        #     # delete high-level features
+        #     rgb_variable_map[variable.name.replace(':0', '')] = variable
+        # rgb_saver = tf.train.Saver(var_list=rgb_variable_map, reshape=True)
+
         print 'Init variable'
         sess.run(init)
 
@@ -188,16 +211,12 @@ def train():
 
         print 'Start training'
         step = 0
-        epoch = 4
-        training_iters = epoch * 86768 / batch_size
         for data in df:
             step = step + 1
-            if step >= training_iters:
-                break
             train_batch_xs, train_batch_ys = data
             _, train_loss = sess.run([train_op, loss],
                      feed_dict={x: train_batch_xs, y: train_batch_ys, dropout: 0.5, training: True})
-            if step<50 or step % 1000 == 0:
+            if step<10 or step % 1000 == 0:
                 result = sess.run(merged,
                                   feed_dict={x: train_batch_xs, y: train_batch_ys,
                                              dropout: 0.5, training: True})
@@ -221,7 +240,7 @@ def train():
     
                 print 'Datetime', datetime.datetime.now().isoformat()[:-7],'Training step:', step, np.sum(final_save_image1), np.sum(final_save_image2), 'Training Loss', train_loss
 
-            if (step % validation_iter==0 or step == 4000) and step != 0 :
+            if step % validation_iter==0:
                 print "Doing validation..."
                 tmp_cc = []; tmp_sim = []; tmp_auc = []
                 index = 0

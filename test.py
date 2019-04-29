@@ -9,7 +9,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from tensorpack.dataflow import *
 from tensorpack.dataflow.imgaug import *
-from dataflow import VideoDataset, ImageFromFile, mapf
+from dataflow import VideoDataset, ImageFromFile, mapf, mapf_test
 from utils.network import *
 from utils.metrics import CC, SIM, AUC_Judd, KLdiv, NSS, AUC_Borji
 
@@ -28,9 +28,9 @@ def get_arguments():
     parser.add_argument('--pretrain', type=str, default=None, help='finetune using SGD')
 
     parser.add_argument('--trainingprops',type=float, default=0.9, help='')
-    parser.add_argument('--dataset',type=str, default='dhf1k', help='svsd/dhf1k.')
+    parser.add_argument('--dataset',type=str, default='svsd', help='svsd/dhf1k.')
     parser.add_argument('--videolength',type=int,default=16, help='16 in this network')
-    parser.add_argument('--overlap',type=int,default=8, help='0 to videolength')
+    parser.add_argument('--overlap',type=int,default=15, help='0 to videolength')
     parser.add_argument('--imagesize', type=tuple, default=(112,112))
 
     
@@ -71,24 +71,20 @@ args = get_arguments()
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 dataset = args.dataset
 if dataset=='svsd':
-    LeftPath = '../svsd/test/left_view_svsd/'
-    RightPath = '../svsd/test/right_view_svsd/'
-    GtPath = '../svsd/test/view_svsd_density/'
-elif dataset == 'dhf1k':
-    LeftPath = '/data/SaliencyDataset/Video/DHF1K/frames/'
-    GtPath = '/data/SaliencyDataset/Video/DHF1K/density/'
+    frame_path = ['/data/lishikai/svsd/test/left_view_svsd/']
+    density_path = ['/data/lishikai/svsd/test/left_density_svsd/']
+    fixation_path = '/data/lishikai/svsd/test/left_fixation_svsd/'
     
-
 batch_size=args.batch
-videodataset = VideoDataset(LeftPath,GtPath, video_length=16, img_size=(112,112), bgr_mean_list=[98,102,90], sort='rgb')
+videodataset = VideoDataset(frame_path,density_path, fixation_dir=fixation_path, video_length=16, img_size=(112,112), bgr_mean_list=[98,102,90], sort='rgb')
 videodataset.setup_video_dataset_p3d(overlap=args.overlap, training_example_props=0)
 videodataset.get_frame_p3d_tf()
 # valid
 gt_df = ImageFromFile(videodataset.final_valid_list)
 gt_df = MultiThreadMapData(
     gt_df, nr_thread=16,
-    map_func=mapf,
-    buffer_size=100,
+    map_func=mapf_test,
+    buffer_size=500,
     strict=True)
 gt_df = BatchData(gt_df, batch_size, remainder=False, use_list=True)
 gt_df = PrefetchDataZMQ(gt_df, nr_proc=1)
@@ -96,8 +92,6 @@ gt_df.reset_state()
 
 print "Using dataflow to load data... It may cost a little time to create the file lists.."
 structure = args.structure
-validation_iter=args.validiter
-plot_iter = args.plotiter
 
 
 frames = 16
@@ -112,11 +106,28 @@ with tf.device('/cpu:0'):
 modelList=[
     # 'unet_2_0.0001__2019-04-20',
     # 'concate_2_0.0001__2019-04-20',
-    'unet++_2_0.0001__2019-04-20'
+    # 'unet++_2_0.0001__2019-04-20'
+    # 'svsd_unet++_2_0.0001_TRUEsigmoid_bn_2019-04-20'
+    # 'dhf1k_unet++_2_0.0001_sigmoid_gn_ol8_2019-04-21',
+    # 'dhf1k_unet++_2_0.0001_sigmoid_bn_ol8_2019-04-21',
+    # 'svsd_unet++_2_0.0001_sigmoid_bn_ol8_finetune_2019-04-21'
+    # 'svsd_unet++_2_0.00001_sigmoid_bn_ol8_finetune_2019-04-21'
+    # 'dhf1k_unet++_2_0.01_sigmoid_gn_ol8_2019-04-21',
+    # 'dhf1k_unet++_2_1e-05_sigmoid_bn_ol8_2019-04-21',
+    # 'svsd_unet++_2_0.0001_sigmoid_bn_ol8_finetune_2_2019-04-21',
+    # 'svsd_unet++_2_0.0001_SA_sigmoid_bn_ol8_finetune_2019-04-22',
+    # 'nonsa_unet++',
+    # 'svsdndhf1k_unet++_2_0.0001_sigmoid_2019-04-23'
+    # 'svsdndhf1k_unet++_2_0.0001_sigmoid_subsampleSA_ol8_2019-04-23'
+    # 'svsdndhf1k_unet++_2_0.0001_sigmoid_subsampleSA_ol15_2019-04-24'
+    # 'selected/svsdndhf1k_unet++_2_0.0001_real_downsample_ol8_2019-04-24'
+    # 'svsdndhf1k_unet++_2_0.0001_real_downsample_ol8_2019-04-24'
+    # 'svsdndhf1k_unet++_2_0.0001_fake_downsample_ol8_2019-04-25'
+    'svsdndhf1k_unet++_2_0.0001_real_subsample_SA_ol15_2019-04-27'
 ]
 
 for modelNumber in range(len(modelList)):
-    structure = modelList[modelNumber].split('_')[0]
+    structure = modelList[modelNumber].split('_')[1]
     if structure == 'unet':
         pred=p3d.p3d_unet(x, dropout, batch_size, training)
     elif structure == 'concat': 
@@ -134,8 +145,9 @@ for modelNumber in range(len(modelList)):
         saver = tf.train.Saver(var_list=var_list)
         print 'Init variable'
         sess.run(init)
-
-        ckpt = tf.train.get_checkpoint_state("./model/"+modelList[modelNumber])
+        # saver.restore(sess, './log/' + "model_savemodel.cpkt-" + str(111000))
+        # sess.run(tf.global_variables_initializer())
+        ckpt = tf.train.get_checkpoint_state("./model/"+modelList[modelNumber]+'/')
         if ckpt and ckpt.model_checkpoint_path:
             print("loading checkpoint %s,waiting......" % ckpt.model_checkpoint_path)
             saver.restore(sess, ckpt.model_checkpoint_path)
@@ -143,22 +155,25 @@ for modelNumber in range(len(modelList)):
         tmp_cc = []; tmp_sim = []; tmp_auc = []; tmp_nss = []; tmp_aucborji = [];
         index = 0
         for valid_data in gt_df:
-            valid_batch_xs, valid_batch_ys = valid_data
+            xs, densitys, fixations = valid_data
             index += 1
-            image = sess.run(pred, feed_dict={ x: valid_batch_xs, dropout: 0,  training: False})
-            if index % 50 == 0:
+            image = sess.run(pred, feed_dict={ x: xs, dropout: 0,  training: False})
+            if index % 100 == 0:
                 print " Step: %d, Metrics: CC: %.3f  SIM: %.3f   NSS: %.3f  AUC_Judd: %.3f   AUC_Borji: %.3f" \
                     % (index, np.mean(tmp_cc), np.mean(tmp_sim),  np.mean(tmp_nss), np.mean(tmp_auc), np.mean(tmp_aucborji))
-            for (prediction, ground_truth) in zip(image, valid_batch_ys):
-                prediction = np.transpose(np.array(prediction[-1]), (2, 0, 1))
-                zero_gt = []
-                zero_gt.append(ground_truth[-1])
-                for (preds, gt) in zip(prediction, zero_gt):
-                    tmp_cc.append(CC(preds, gt))
-                    tmp_sim.append(SIM(preds, gt))
-                    tmp_auc.append(AUC_Judd(preds, gt))  
-                    tmp_nss.append(NSS(preds, gt))
-                    tmp_aucborji.append(AUC_Borji(preds, gt))
+            image = np.reshape(image, [-1, 16, CROP_SIZE, CROP_SIZE])
+            for (prediction, density, fixation) in zip(image, densitys, fixations):
+                # 16 112 112 ,  16, 112, 112
+                prediction = np.array(prediction[-1])
+                prediction = cv2.resize(prediction,(960,1080))
+                density = np.array(density[-1])
+                fixation = np.array(fixation[-1])
+                # print np.shape(prediction), np.shape(density), np.shape(fixation)
+                tmp_cc.append(CC(prediction, density))
+                tmp_sim.append(SIM(prediction, density))
+                tmp_auc.append(AUC_Judd(prediction, fixation))  
+                tmp_aucborji.append(AUC_Borji(prediction, fixation))
+                tmp_nss.append(NSS(prediction, fixation))
         tmp_cc = np.array(tmp_cc)[~np.isnan(tmp_cc)]
         tmp_sim = np.array(tmp_sim)[~np.isnan(tmp_sim)]
         tmp_auc = np.array(tmp_auc)[~np.isnan(tmp_auc)]

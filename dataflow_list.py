@@ -12,6 +12,7 @@ from tensorpack.dataflow.imgaug import *
 from tensorpack.input_source import QueueInput, StagingInput
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+
 class VideoDataset():
     def __init__(self, frame_basedir, density_basedir, fixation_dir=None, img_size=(480,288), video_length=16, stack=5, bgr_mean_list=[103.939, 116.779, 123.68],sort='bgr'):
         MEAN_VALUE = np.array(bgr_mean_list, dtype=np.float32)   # B G R/ use opensalicon's mean_value
@@ -53,7 +54,7 @@ class VideoDataset():
             # print self.tuple_list;exit()
         self.num_examples = len(self.tuple_list)
         # shuffle
-        shuffle(self.tuple_list)
+        # shuffle(self.tuple_list)
         self.num_training_examples = int(self.num_examples * training_example_props)
         # 20% for validation and 80% for training 
         self.training_tuple_list = self.tuple_list[:self.num_training_examples]
@@ -70,8 +71,6 @@ class VideoDataset():
     def get_frame_p3d_tf(self, mini_batch=1, phase='training', density_length='full'):
         ## 
         frame_wildcard = "frame_%d.jpg"
-        gt_wildcard = "frame_%d.jpg"
-        fix_wildcard = "frame_%d.bmp"
         ##  training
         tuple_list = self.training_tuple_list
         index_in_epoch = 0
@@ -100,12 +99,6 @@ class VideoDataset():
                     frame_index = i + 1
                     frame_name = gt_wildcard % frame_index
                     current_density_list.append(glob.glob(os.path.join(density_dir, frame_name))[0])
-                if self.fixation_dir:
-                    fixation_dir = os.path.join(self.fixation_dir, video_name)
-                    for i in range(start_frame_index,end_frame_index):
-                        frame_index = i + 1
-                        frame_name = fix_wildcard % frame_index
-                        current_density_list.append(glob.glob(os.path.join(fixation_dir, frame_name))[0])
             tup_list.append(current_frame_list)
             tup_list.append(current_density_list)
             if self.fixation_dir:
@@ -114,50 +107,7 @@ class VideoDataset():
             self.final_train_list.append(tup_list)
             tup_list = []
        
-        ## validation
-        tuple_list = self.validation_tuple_list
-        index_in_epoch = 0
-        num_examples = self.num_validation_examples
-        tup_list = []
-        while not  index_in_epoch >= num_examples - mini_batch:
-            tup_batch = tuple_list[index_in_epoch:index_in_epoch+mini_batch]
-            for tup in tup_batch:
-                current_frame_list = []
-                current_density_list = []
-                current_fixation_list = []
-                video_index, start_frame_index=tup
-                end_frame_index = start_frame_index + self.video_length
-                video_dir = self.video_dir_list[video_index]
-                video_name = os.path.basename(video_dir)
-                for each_density_dir in self.density_basedir:
-                    if os.path.exists(os.path.join(each_density_dir, video_name)):
-                        density_dir = os.path.join(each_density_dir, video_name)
-                        continue
-                for i in range(start_frame_index, end_frame_index):
-                    frame_index = i + 1
-                    frame_name = frame_wildcard % frame_index
-                    current_frame_list.append(glob.glob(os.path.join(video_dir, frame_name))[0])
-                for i in range(start_frame_index,end_frame_index):
-                    frame_index = i + 1
-                    frame_name = gt_wildcard % frame_index
-                    current_density_list.append(glob.glob(os.path.join(density_dir, frame_name))[0])              
-                if self.fixation_dir:
-                    fixation_dir = os.path.join(self.fixation_dir, video_name)
-                    for i in range(start_frame_index,end_frame_index):
-                        frame_index = i + 1
-                        frame_name = fix_wildcard % frame_index
-                        # print fixation_dir, frame_name
-                        current_fixation_list.append(glob.glob(os.path.join(fixation_dir, frame_name))[0])
-
-            tup_list.append(current_frame_list)
-            tup_list.append(current_density_list)
-            if self.fixation_dir:
-                tup_list.append(current_fixation_list)
-            index_in_epoch += mini_batch
-            self.final_valid_list.append(tup_list)
-            tup_list = []
         
-
 
 
 class ImageFromFile(RNGDataFlow):
@@ -240,9 +190,15 @@ def mapf_test(dp):
     return ret_frame, ret_density, ret_fixation
 
 if __name__ == "__main__":
-    train_frame_basedir = '../svsd/test/left_view_svsd'
-    train_density_basedir = '../svsd/test/view_svsd_density/'
-    videodataset = VideoDataset(train_frame_basedir,train_density_basedir, video_length=16, img_size=(112,112), bgr_mean_list=[98,102,90], sort='rgb')
+    frame_path = [
+        '/data/lishikai/svsd/train/left_view_svsd/', 
+        '/data/SaliencyDataset/Video/DHF1K/frames/'
+        ]
+    density_path = [
+            '/data/lishikai/svsd/train/left_density_svsd/',
+            '/data/SaliencyDataset/Video/DHF1K/density/'
+        ]
+    videodataset = VideoDataset(frame_path,density_path, video_length=16, img_size=(112,112), bgr_mean_list=[98,102,90], sort='rgb')
     videodataset.setup_video_dataset_p3d(overlap=15, training_example_props=0.8)
     videodataset.get_frame_p3d_tf()
     # print videodataset.final_train_list[0][0], videodataset.final_train_list

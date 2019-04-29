@@ -2,128 +2,10 @@ import numpy as np
 import tensorflow as tf
 
 DEFAULT_PADDING = 'SAME'
+# POOL
+def pool3d(value, sub_size):
+    return tf.layers.max_pooling3d(value, sub_size, sub_size)
 
-def load(data_path, session):
-    data_dict = np.load(data_path).item()
-    for key in data_dict:
-        with tf.variable_scope(key, reuse=True):
-            for subkey, data in zip(('weights', 'biases'), data_dict[key]):
-                session.run(tf.get_variable(subkey).assign(data))
-
-def load_with_skip(data_path, session, skip_layer):
-    data_dict = np.load(data_path).item()
-    for key in data_dict:
-        if key not in skip_layer:
-            with tf.variable_scope(key, reuse=True):
-                for subkey, data in zip(('weights', 'biases'), data_dict[key]):
-                    session.run(tf.get_variable(subkey).assign(data))
-
-def get_unique_name(self,prefix):
-    id = sum(t.startswith(prefix) for t,_ in self.layers.items())+1
-    return '%s_%d'%(prefix, id)
-
-
-def save_npy(self, sess, npy_path="./vgg16_retrain.npy"):
-    assert isinstance(sess, tf.Session)
-
-    data_dict = {}
-
-    for (name, idx), var in self.var_dict.items():
-        var_out = sess.run(var)
-        if not data_dict.has_key(name):
-            data_dict[name] = {}
-        data_dict[name][idx] = var_out
-
-    np.save(npy_path, data_dict)
-    print("file saved", npy_path)
-    return npy_path
-
-def make_var(name, shape):
-    return tf.get_variable(name, shape)
-
-def conv(input, k_h, k_w, c_o, s_h, s_w, name, relu=True, padding=DEFAULT_PADDING, group=1):
-    c_i = input.get_shape()[-1]
-    assert c_i%group==0
-    assert c_o%group==0        
-    convolve = lambda i, k: tf.nn.conv2d(i, k, [1, s_h, s_w, 1], padding=padding)
-    with tf.variable_scope(name) as scope:
-        kernel = make_var('weights', shape=[k_h, k_w, c_i/group, c_o])
-        biases = make_var('biases', [c_o])
-        if group==1:
-            conv = convolve(input, kernel)
-        else:
-            input_groups = tf.split(3, group, input)
-            kernel_groups = tf.split(3, group, kernel)
-            output_groups = [convolve(i, k) for i,k in zip(input_groups, kernel_groups)]
-            conv = tf.concat(3, output_groups)                
-        if relu:
-            bias = tf.reshape(tf.nn.bias_add(conv, biases), conv.get_shape().as_list())
-            return tf.nn.relu(bias, name=scope.name)
-        return tf.reshape(tf.nn.bias_add(conv, biases), conv.get_shape().as_list(), name=scope.name)
-
-def relu(input, name):
-    return tf.nn.relu(input, name=name)
-
-def max_pool(input, k_h, k_w, s_h, s_w, name, padding=DEFAULT_PADDING):
-    return tf.nn.max_pool(input,
-                          ksize=[1, k_h, k_w, 1],
-                          strides=[1, s_h, s_w, 1],
-                          padding=padding,
-                          name=name)
-
-def avg_pool(input, k_h, k_w, s_h, s_w, name, padding=DEFAULT_PADDING):
-    return tf.nn.avg_pool(input,
-                          ksize=[1, k_h, k_w, 1],
-                          strides=[1, s_h, s_w, 1],
-                          padding=padding,
-                          name=name)
-
-def lrn(input, radius, alpha, beta, name, bias=1.0):
-    return tf.nn.local_response_normalization(input,
-                                              depth_radius=radius,
-                                              alpha=alpha,
-                                              beta=beta,
-                                              bias=bias,
-                                              name=name)
-
-def concat(inputs, axis, name):
-    return tf.concat(concat_dim=axis, values=inputs, name=name)
-
-def fc(input, num_in, num_out, name, relu=True):
-    with tf.variable_scope(name) as scope:
-        weights = make_var('weights', shape=[num_in, num_out])
-        biases = make_var('biases', [num_out])
-        op = tf.nn.relu_layer if relu else tf.nn.xw_plus_b
-        fc = op(input, weights, biases, name=scope.name)
-        return fc
-
-def softmax(input, name):
-    return tf.nn.softmax(input, name)
-
-def dropout(input, keep_prob):
-    return tf.nn.dropout(input, keep_prob)
-
-def deconv2d(inputs, filter_height, filter_width, output_shape, stride=(1, 1), padding='SAME', name='Deconv2D'):
-    input_channels = int(inputs.get_shape()[-1])
-    output_channels = output_shape[-1]
-    # fan_in = filter_height * filter_width * output_channels
-    # stddev = tf.sqrt(2.0 / fan_in)
-    weights_shape = [filter_height, filter_width, output_channels, input_channels]
-    biases_shape = [output_channels]
-
-    with tf.variable_scope(name):
-        # filters_init = tf.truncated_normal_initializer(stddev=stddev)
-        # biases_init = tf.constant_initializer(0.1)
-
-        filters = tf.get_variable(
-            'weights', shape=weights_shape, collections=['weights', 'variables'])
-            # 'weights', shape = weights_shape, initializer = filters_init, collections = ['weights', 'variables'])
-        # biases = tf.get_variable(
-            # 'biases', shape=biases_shape, collections=['biases', 'variables'])
-            # 'biases', shape = biases_shape, initializer = biases_init, collections = ['biases', 'variables'])
-        deconv=tf.nn.conv2d_transpose(inputs, filters, output_shape, strides=[1, 2, 2, 1], padding=padding)
-        deconv = tf.nn.relu(deconv)
-        return deconv
 def unpool(value, name='unpool'):
     """N-dimensional version of the unpooling operation from
     https://www.robots.ox.ac.uk/~vgg/rg/papers/Dosovitskiy_Learning_to_Generate_2015_CVPR_paper.pdf
@@ -163,126 +45,7 @@ def unpool3D(value,input_shape, stides=(1,2,2), name='unpool'):
         out = tf.reshape(out, out_size, name=scope)
     return out
 
-def maxpool3d(inputs, depth_k=2,k=2,name='maxpool3d'):
-    # MaxPool2D wrapper
-    return tf.nn.max_pool3d(inputs, ksize=[1, depth_k, k, k, 1], strides=[1, depth_k, k, k, 1],
-                          padding='SAME',name=name)
-
-
-def conv3d(inputs, filters, bias, padding='SAME',strides=1,name='conv3d'):
-    # with tf.variable_scope(name):
-    # filters = tf.get_variable(
-    #     'weights', shape=filters, collections=['weights', 'variables'])
-    # bias = tf.get_variable(
-    #     'weights', shape=bias, collections=['weights', 'variables'])
-    # filters=make_var('weights',shape=filters)
-    # bias=make_var('bias',shape=bias)
-    with tf.name_scope(name):
-        with tf.name_scope('weights'):
-            filters_shape =  tf.Variable(tf.truncated_normal(shape=filters,stddev=0.1))
-        with tf.name_scope('biases'):
-            bias_shape = tf.Variable(tf.truncated_normal(shape=bias,stddev=0.1))
-        with tf.name_scope('conv3d'):
-            conv3d = tf.nn.conv3d(inputs, filter=filters_shape, strides=[1, strides, strides, strides, 1], padding=padding,name=name)
-        with tf.name_scope('bias_add'):
-            outputs = tf.nn.bias_add(conv3d, bias=bias_shape)
-        conv3d = tf.nn.relu(outputs)
-        tf.summary.histogram(name + '/outputs', conv3d)
-    return conv3d
-
-def deconv3d(inputs, filters, bias, output_shape, strides,padding='VALID',name='deconv3d'):
-    with tf.name_scope(name):
-        with tf.name_scope('weights'):
-            filters_shape = tf.Variable(tf.truncated_normal(shape=filters,stddev=0.1))
-        with tf.name_scope('biases'):
-            bias_shape = tf.Variable(tf.truncated_normal(shape=bias,stddev=0.1))
-    # filters = tf.get_variable(
-    #     'weights', shape=filters, collections=['weights', 'variables'])
-    # bias = tf.get_variable(
-    #     'weights', shape=bias, collections=['weights', 'variables'])
-    # filters=make_var('weights',shape=filters)
-    # bias=make_var('bias',shape=bias)
-        with tf.name_scope('deconv'):
-            deconv = tf.nn.conv3d_transpose(inputs, filter=filters_shape, output_shape=output_shape, strides=strides, padding=padding,name=name)
-        with tf.name_scope('bias_add'):
-            deconv = tf.nn.bias_add(deconv, bias=bias_shape)
-        deconv = tf.nn.relu(deconv)
-        tf.summary.histogram(name + '/outputs', deconv)
-    return deconv
-
-def leaky_relu(inputs, leak=0.1, name='LeakyRelu'):
-    with tf.name_scope(name):
-        return tf.maximum(inputs, leak * inputs)
-
-def batch_norm(inputs, decay, is_training, var_epsilon=1e-3, name='batch_norm'):
-    with tf.variable_scope(name):
-        scale = tf.Variable(tf.ones([int(inputs.get_shape()[-1])]))
-        offset = tf.Variable(tf.zeros([int(inputs.get_shape()[-1])]))
-        avg_mean = tf.Variable(tf.zeros([int(inputs.get_shape()[-1])]), trainable=False)
-        avg_var = tf.Variable(tf.ones([int(inputs.get_shape()[-1])]), trainable=False)
-
-        def get_batch_moments():
-            batch_mean, batch_var = tf.nn.moments(inputs, list(range(len(inputs.get_shape()) - 1)))
-            assign_mean = tf.assign(avg_mean, decay * avg_mean + (1.0 - decay) * batch_mean)
-            assign_var = tf.assign(avg_var, decay * avg_var + (1.0 - decay) * batch_var)
-            with tf.control_dependencies([assign_mean, assign_var]):
-                return tf.identity(batch_mean), tf.identity(batch_var)
-
-        def get_avg_moments():
-            return avg_mean, avg_var
-
-        mean, var = tf.cond(is_training, get_batch_moments, get_avg_moments)
-        return tf.nn.batch_normalization(inputs, mean, var, offset, scale, var_epsilon)
-
-
-# def batch_norm(x, is_training=True, scope='batch_norm'):
-#     return tf_contrib.layers.batch_norm(x,
-#                                         decay=0.9, epsilon=1e-05,
-#                                         center=True, scale=True, updates_collections=None,
-#                                         is_training=is_training, scope=scope)
-
-
-def attention(x, ch, name, mask=False):
-    ch = x.get_shape()[-1]    
-    with tf.variable_scope(name): # [bs, h, w, c]
-        f = tf.layers.conv3d(x, filters=ch//8, # [bs, l, h, w, c']
-            kernel_size=1,
-            strides=1,
-            padding='SAME',
-        )
-
-        g = tf.layers.conv3d(x, filters=ch//8, # [bs, l, h, w, c']
-            kernel_size=1,
-            strides=1,
-            padding='SAME',
-        )
-
-
-        h = tf.layers.conv3d(x, filters=ch, # [bs, l, h, w, c']
-            kernel_size=1,
-            strides=1,
-            padding='SAME',
-        )
-    
-    # print f, g, 
-    # N = l * h * w 
-    s = tf.matmul(hw_flatten(g), hw_flatten(f), transpose_b=True) # # [bs, N, N]
-    beta = tf.nn.softmax(s, axis=-1)  # attention map
-
-    o = tf.matmul(beta, hw_flatten(h)) # [bs, N, C]
-    gamma = tf.get_variable("gamma"+name, [1], initializer=tf.constant_initializer(0.0))
-
-    o = tf.reshape(o, shape=tf.shape(x)) # [bs, h, w, C]
-    if mask:
-        x = o * gamma
-    else:
-        x = o * gamma +x
-    return x
-
-# opsnput.get_shape().as_list()[1]
-def hw_flatten(x) :
-    return tf.reshape(x, shape=[tf.shape(x)[0], -1, tf.shape(x)[-1]])
-
+# loss
 def smooth_l1_loss(bbox_pred, bbox_targets, bbox_inside_weights, bbox_outside_weights, sigma=3.0, dim=[0]):
     sigma_2 = sigma ** 2
     box_diff = bbox_pred - bbox_targets
@@ -298,7 +61,140 @@ def smooth_l1_loss(bbox_pred, bbox_targets, bbox_inside_weights, bbox_outside_we
     # loss_box = tf.reduce_mean(tf.reduce_sum(out_loss_box))
     return loss_box
 
+# BN / GN
+def GroupNorm(x, G=32, esp=1e-5):
+    """
+    https://arxiv.org/abs/1803.08494
+    """
+    with tf.variable_scope('group_norm'):
+        # normalize
+        # tranpose: [bs, d, h, w, c] to [bs, c, d, h, w] following the paper
+        x = tf.transpose(x, [0, 4, 1, 2, 3])
+        N, C, D, H, W = x.get_shape().as_list()
+        G = min(G, C)
+        x = tf.reshape(x, [-1, G, C // G, D, H, W])
+        mean, var = tf.nn.moments(x, [2, 3, 4, 5], keep_dims=True)
+        x = (x - mean) / tf.sqrt(var + esp)
+        # per channel gamma and beta
+        gamma = tf.Variable(tf.constant(1.0, shape=[C]), dtype=tf.float32, name='gamma')
+        beta = tf.Variable(tf.constant(0.0, shape=[C]), dtype=tf.float32, name='beta')
+        gamma = tf.reshape(gamma, [1, C, 1, 1, 1])
+        beta = tf.reshape(beta, [1, C, 1, 1, 1])
 
+        output = tf.reshape(x, [-1, C, D, H, W]) * gamma + beta
+        # tranpose: [bs, c, h, w, c] to [bs, h, w, c] following the paper
+        output = tf.transpose(output, [0, 2, 3, 4, 1])
+    return output
+
+def normalize(x, training, mode='bn'):
+    if mode == 'bn':
+        x = tf.layers.batch_normalization(x, training=training)
+    elif mode == 'gn':
+        x = GroupNorm(x)
+    return x
+
+# layers
+def concat(x):
+    return tf.concat(x, axis=-1)
+
+def conv3d(x, channel, kernel, strides, training, name, mode='bn'):
+    x = tf.layers.conv3d(x, channel, kernel, strides, 'same', name=name)
+    x = normalize(x, training, mode)
+    x = tf.nn.relu(x)
+    return x
+
+def transpose_conv3d(x, channel, kernel, strides, training, name, mode='bn'):
+    x = tf.layers.conv3d_transpose(x, channel, kernel, strides, 'same', name=name)
+    x = normalize(x, training, mode)
+    x = tf.nn.relu(x)
+    return x
+
+## Attention
+## NON-LOCAL
+def non_local(x, name, training, sub_sample=True):
+    residual = x
+    in_channels = x.get_shape()[-1]
+    inter_channels =  in_channels // 2
+    batch_size = x.get_shape().as_list()[0]
+    g_x = tf.layers.conv3d(x, filters=inter_channels, # [bs, l, h, w, c']
+            kernel_size=1,
+            strides=1,
+            padding='SAME',
+        )
+    if sub_sample:
+        g_x = pool3d(g_x)
+    g_x = tf.reshape(g_x, [batch_size, -1, inter_channels])
+
+    theta_x = tf.layers.conv3d(x, filters=inter_channels, # [bs, l, h, w, c']
+            kernel_size=1,
+            strides=1,
+            padding='SAME',
+        )
+    theta_x = tf.reshape(theta_x, (batch_size, -1, inter_channels))
+
+    phi_x = tf.layers.conv3d(x, filters=inter_channels, # [bs, l, h, w, c']
+            kernel_size=1,
+            strides=1,
+            padding='SAME',
+        )
+    if sub_sample:
+        phi_x = pool3d(phi_x)
+    phi_x = tf.reshape(phi_x, (batch_size, inter_channels, -1))
+
+    f = tf.matmul(theta_x, phi_x)
+    N = f.get_shape().as_list()[-1]
+    f_div_C = f / N
+    y = tf.matmul(f_div_C, g_x)
+    y = tf.reshape(y, [batch_size] + x.get_shape().as_list()[1:-1] + [inter_channels])
+    W_y = tf.layers.conv3d(y, in_channels, 1, 1, 'same')
+    W_y = normalize(W_y, training=training, mode='bn')
+    W_y = tf.nn.relu(W_y)
+    z = W_y + residual
+
+    return z
+
+# SA
+def attention(x, name, training, mode='bn', subsample=False, sub_size=2):
+    # ch = x.get_shape()[-1]
+    shape = x.get_shape().as_list()
+    batch_size = shape[0]
+    ch = shape[-1]
+    inter_channels = max(1, ch//8)
+    with tf.variable_scope(name): # [bs, h, w, c]
+        f = tf.layers.conv3d(x, filters=inter_channels, # [bs, l, h, w, c']
+            kernel_size=1,
+            strides=1,
+            padding='SAME',
+        )
+        g = tf.layers.conv3d(x, filters=inter_channels, # [bs, l, h, w, c']
+            kernel_size=1,
+            strides=1,
+            padding='SAME',
+        )
+        h = tf.layers.conv3d(x, filters=ch, # [bs, l, h, w, c]
+            kernel_size=1,
+            strides=1,
+            padding='SAME',
+        )
+    # N = l * h * w 
+    if subsample:
+        f = pool3d(f, sub_size)
+        g = pool3d(g, sub_size/2)
+        h = pool3d(h, sub_size)
+    s = tf.matmul(hw_flatten(g), hw_flatten(f), transpose_b=True) # # [bs, N, N/8]
+    beta = tf.nn.softmax(s, axis=-1)  # attention map
+    o = tf.matmul(beta, hw_flatten(h)) # [bs, N, C]
+    o = tf.reshape(o, shape=[batch_size]+[each*2/sub_size for each in shape[1:-1]]+[ch]) # [bs, h, w, C]
+    o = tf.layers.conv3d(o, ch, 1, sub_size/2, 'same')
+    o = normalize(o, training=training, mode=mode)
+    o = tf.nn.relu(o)
+    gamma = tf.get_variable("gamma"+name, [1], initializer=tf.constant_initializer(0.0))
+    x = o * gamma +x
+    return x
+
+def hw_flatten(x) :
+    return tf.reshape(x, shape=[tf.shape(x)[0], -1, tf.shape(x)[-1]])
+# CBAM
 def cbam_block(input_feature, name, ratio=8):
   """Contains the implementation of Convolutional Block Attention Module(CBAM) block.
   As described in https://arxiv.org/abs/1807.06521.
@@ -377,18 +273,4 @@ def spatial_attention(input_feature, name):
     
   return input_feature * concat
     
-
-def concat(_X):
-    return tf.concat(_X, axis=-1)
-
-def conv3d(_X, channel, kernel, strides, training, name):
-    _X = tf.layers.conv3d(_X, channel, kernel, strides, 'same', name=name)
-    _X = tf.layers.batch_normalization(_X, training=training)
-    _X = tf.nn.relu(_X)
-    return _X
-
-def transpose_conv3d(_X, channel, kernel, strides, training, name):
-    _X = tf.layers.conv3d_transpose(_X, channel, kernel, strides, 'same', name=name)
-    _X = tf.layers.batch_normalization(_X, training=training)
-    _X = tf.nn.relu(_X)
-    return _X
+# CBAM-Temporal
